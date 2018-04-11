@@ -15,19 +15,29 @@ use Term::ANSIColor qw(:constants);
 # reset colors to default when done
 $Term::ANSIColor::AUTORESET = 1;
 
-my $VERSION = '1.0.3';
+my $VERSION = '1.0.4';
 
 # declare variables for script options and handle them
-my ( $help, $verbose, $full, $fast, $force, $cltrue, $skipyum );
+my ( $HELP, $VERBOSE, $FULL, $FAST, $FORCE, $CLTRUE, $SKIPYUM, $SKIPHOSTNAME, $HOSTNAME, $TIER );
+my @BASHURL;
 GetOptions(
-    "help"      => \$help,
-    "verbose"   => \$verbose,
-    "full"      => \$full,
-    "fast"      => \$fast,
-    "force"     => \$force,
-    "installcl" => \$cltrue,
-    "skipyum"   => \$skipyum,
-);
+    "help"         => \$HELP,
+    "verbose"      => \$VERBOSE,
+    "full"         => \$FULL,
+    "fast"         => \$FAST,
+    "force"        => \$FORCE,
+    "installcl"    => \$CLTRUE,
+    "skipyum"      => \$SKIPYUM,
+    "skiphostname" => \$SKIPHOSTNAME,
+    "hostname=s"   => \$HOSTNAME,
+    "tier=s"       => \$TIER,
+    "bashurl=s"    => \@BASHURL,
+) or die($!);
+
+# do not allow the script to run if mutually exclusive arguments are passed
+if ( defined $SKIPHOSTNAME && defined $HOSTNAME ) {
+    die "script usage:  skiphostname and hostname arguments are mutually exclusive\n";
+}
 
 # declare global variables for script
 # both of these variables are used during the CL install portion
@@ -45,7 +55,7 @@ print_vms("Version: $VERSION\n");
 # help option should be processed first to ensure that nothing is erroneously executed if this option is passed
 # converted this to a function to make main less clunky and it may be of use if we add more script arguments in the future
 #  ex:  or die print_help_and_exit();
-if ($help) {
+if ($HELP) {
     print_help_and_exit();
 }
 
@@ -63,6 +73,8 @@ setup_resolv_conf();
 
 install_packages();
 set_screen_perms();
+
+configure_etc_cpupdate_conf() if ($TIER);
 
 # '/vat/cpanel/cpnat' is sometimes populated with incorrect IP information
 # on new openstack builds
@@ -83,17 +95,12 @@ my %sysinfo = (
 # hostname is in the format of 'os.cptier.tld'
 get_sysinfo( \%sysinfo );
 
-my $hostname = $sysinfo{'hostname'};
-my $natip    = $sysinfo{'natip'};
-my $ip       = $sysinfo{'ip'};
+my $natip = $sysinfo{'natip'};
+my $ip    = $sysinfo{'ip'};
 
-# set hostname
-print_vms("Setting hostname to $hostname");
-
-# use whmapi1 to set hostname so that we get a return value
-# this will be important when we start processing output to ensure these calls succeed
-# https://documentation.cpanel.net/display/SDK/WHM+API+1+Functions+-+sethostname
-system_formatted("/usr/local/cpanel/bin/whmapi1 sethostname hostname=$hostname");
+# set_hostname() will return the value of the new hostname for the server
+# and the value may not be the same as what is in %sysinfo
+my $hostname = set_hostname( $sysinfo{'hostname'} );
 
 # edit files with the new hostname
 configure_99_hostname_cfg($hostname);
@@ -118,7 +125,14 @@ set_local_mysql_root_password();
 add_motd("\n\nVM Setup Script created the following test accounts:\n");
 
 create_api_token();
+
+# create cptest account along with a test email account and database
 create_primary_account();
+
+# create a reseller account and an account owned by the reseller account
+if ( not create_account( "reseller", 1, "root" ) ) {
+    create_account( "owned", 0, "reseller" );
+}
 
 update_tweak_settings();
 disable_cphulkd();
@@ -128,7 +142,7 @@ disable_cphulkd();
 handle_additional_options();
 
 # rather than remove the --installcl option, I am putting in a some temp code saying to look for it in a future release
-if ($cltrue) {
+if ($CLTRUE) {
     print_info("The option to install CloudLinux (--installcl) has been temporarily removed.  Please look for it to return in a future release.  Thank you!\n");
 }
 
@@ -141,13 +155,13 @@ if ($cltrue) {
 # from a CL server
 # # grep ^rpm_dist /var/cpanel/sysinfo.config
 # rpm_dist=cloudlinux
-#if ( not $force and $sysinfo{'ostype'} eq "cloudlinux" ) {
+#if ( not $FORCE and $sysinfo{'ostype'} eq "cloudlinux" ) {
 #    print_warn("CloudLinux already detected, no need to install CloudLinux\n");
 
 # No need to install CloudLinux. It's already installed
-#    $cltrue = 0;
+#    $CLTRUE = 0;
 #}
-#if ($cltrue) {
+#if ($CLTRUE) {
 
 # Remove /var/cpanel/nocloudlinux touch file (if it exists)
 #    if ( -e ("/var/cpanel/nocloudlinux") ) {
@@ -185,9 +199,11 @@ exit;
 # add_motd() - appends all arguments to '/etc/motd'
 # get_sysinfo() - populates %sysinfo hash with data
 # install_packages() - installs some useful yum packages
+# set_hostname() - returns the new hostname of the server after potentially setting it
 # set_local_mysql_root_password() - sets the local root password for mysql which ensures that mysql is running and we have access to it
 # create_api_token() - make API call to create an API token with the 'all' acl and add the token to '/etc/motd'
 # create_primary_account() - create 'cptest' cPanel acct w/ email address, db, and dbuser - then add info to '/etc/motd'
+# create_account() - create a cPanel account based on the arguments passed.  arg 1 is the name of the account, arg 2 is whether it is a reseller account, and arg 3 is the owner of the account
 # update_tweak_settings() - update tweak settings to allow remote domains and unregisteredomains
 # disable_cphulkd() - stop and disable cphulkd
 # restart_cpsrvd() - restarts cpsrvd
@@ -209,6 +225,7 @@ exit;
 # append_history_options_to_bashrc() - append options to '/root/.bashrc' so that we have unlimited bash history
 # create_vms_log_file() - creates the scripts log file
 # append_vms_log() - appends a line (given as argument) to the scripts log file
+# disable_ea4_experimental() - disables the ea4-experimental repository if yum succeeds in install_packages()
 #
 #
 # process_output() - processes the output of syscalls passed to system_formatted()
@@ -369,7 +386,7 @@ sub print_formatted {
             }
 
             append_vms_log($line);
-            if ($verbose) {
+            if ($VERBOSE) {
                 print $line;
             }
         }
@@ -392,7 +409,7 @@ sub system_formatted {
     my $retval = 1;
 
     append_vms_log("\nCommand:  $cmd\n");
-    if ($verbose) {
+    if ($VERBOSE) {
         print_command($cmd);
     }
 
@@ -412,6 +429,11 @@ sub system_formatted {
         if ( $exit_status && $exit_status != 0 ) {
             print_command($cmd);
             print_warn("Some yum modules may have failed to install, check log for detail");
+        }
+
+        # yum completed successfully
+        else {
+            disable_ea4_experimental();
         }
     }
 
@@ -462,9 +484,18 @@ sub print_help_and_exit {
     print "--full: Passes yes to all optional setup functions\n";
     print "--installcl: Installs CloudLinux(can take a while and requires reboot)\n";
     print "--skipyum:  Skips installing yum packages\n";
+    print "--skiphostname:  Skips setting the hostname\n";
+    print "--hostname=\$hostname:  allows user to provide a hostname for the system\n";
+    print "--tier=\$cpanel_tier:  allows user to provide a cPanel update tier for the server to be set to and enables daily updates\n";
+    print "--bashurl=\$URL_to_bash_file:  allows user to provide the URL to their own bashrc file rather than using the script's default one located at https://ssp.cpanel.net/aliases/aliases.txt\n";
+    print "                              this option can be passed multiple times for more than one bashrc file and/or accept a ',' separated list as well.\n";
+    print "\n";
+    print "Note: --skiphostname and --hostname=\$hostname are mutually exclusive\n";
+    print "\n";
     print "Full list of things this does: \n";
     print "-------------- \n";
     print "- Installs common/useful packages\n";
+    print "- Install the ea4-experimental repository and disables it\n";
     print "- Sets hostname\n";
     print "- Updates /var/cpanel/cpanel.config (Tweak Settings)\n";
     print "- Performs basic setup wizard\n";
@@ -489,7 +520,7 @@ sub print_help_and_exit {
 # create lock file otherwise
 sub handle_lock_file {
     if ( -e "/root/vmsetup.lock" ) {
-        if ( !$force ) {
+        if ( !$FORCE ) {
             print_warn("/root/vmsetup.lock exists. This script may have already been run. Use --force to bypass. Exiting...");
             exit;
         }
@@ -655,16 +686,17 @@ sub _cpanel_gensysinfo {
 sub install_packages {
 
     # do not install packages if skipyum option is passed
-    if ($skipyum) {
+    if ($SKIPYUM) {
         print_info("skipyum option passed, no packages were installed");
         return 1;
     }
 
     # install useful yum packages
     # added perl-CDB_FILE to be installed through yum instead of cpanm
-    print_vms("Installing utilities via yum [ mtr nmap telnet nc vim s3cmd bind-utils pwgen jwhois git moreutils tmux rpmrebuild rpm-build gdb perl-CDB_File perl-JSON ] (this may take a couple minutes)");
+    # per request, enabling the ea4-experimental repo
+    print_vms("Installing utilities via yum [ mtr nmap telnet nc vim s3cmd bind-utils pwgen jwhois git moreutils tmux rpmrebuild rpm-build gdb perl-CDB_File perl-JSON ea4-experimental ] (this may take a couple minutes)");
     ensure_working_rpmdb();
-    system_formatted('/usr/bin/yum -y install mtr nmap telnet nc vim s3cmd bind-utils pwgen jwhois git moreutils tmux rpmrebuild rpm-build gdb perl-CDB_File perl-JSON');
+    system_formatted('/usr/bin/yum -y install mtr nmap telnet nc vim s3cmd bind-utils pwgen jwhois git moreutils tmux rpmrebuild rpm-build gdb perl-CDB_File perl-JSON ea4-experimental');
 
     return 1;
 }
@@ -760,13 +792,15 @@ sub configure_etc_hosts {
     my $hn       = shift;
     my $local_ip = shift;
 
+    ( my $short_hn, undef, undef ) = split /\./, $hn;
+
     # corrent /etc/hosts
     print_vms("Correcting /etc/hosts");
     open( my $fh, '>', '/etc/hosts' )
       or die $!;
     print $fh "127.0.0.1    localhost localhost.localdomain localhost4 localhost4.localdomain4\n";
     print $fh "::1          localhost localhost.localdomain localhost6 localhost6.localdomain6\n";
-    print $fh "$local_ip    host $hostname\n";
+    print $fh "$local_ip    $short_hn $hn\n";
     close($fh);
     return 1;
 }
@@ -794,6 +828,30 @@ sub create_api_token {
     return 1;
 }
 
+# creates account using whmapi1
+# https://documentation.cpanel.net/display/DD/WHM+API+1+Functions+-+createacct
+# three arguments
+# user, is a reseller account, owner of account
+sub create_account {
+
+    my $user        = shift;
+    my $is_reseller = shift;
+    my $owner       = shift;
+
+    my $rndpass;
+
+    print_vms("Create test account - $user");
+
+    $rndpass = _genpw();
+
+    if ( not system_formatted("/usr/local/cpanel/bin/whmapi1 createacct username=$user domain=$user.tld password=$rndpass pkgname=my_package savepgk=1 maxpark=unlimited maxaddon=unlimited reseller=$is_reseller owner=$owner") and not $FORCE ) {
+        print_warn("Failed to create account: $user.tld");
+        return 1;
+    }
+
+    return 0;
+}
+
 # create the primary test account
 # and add one-liners to motd for access
 # if the whmapi1 call to create the primary account fails, and force is not passed
@@ -807,7 +865,7 @@ sub create_primary_account {
     # create test account
     print_vms("Creating test account - cptest");
     $rndpass = _genpw();
-    if ( not system_formatted( "/usr/local/cpanel/bin/whmapi1 createacct username=cptest domain=cptest.tld password=" . $rndpass . " pkgname=my_package savepgk=1 maxpark=unlimited maxaddon=unlimited" ) and not $force ) {
+    if ( not system_formatted( "/usr/local/cpanel/bin/whmapi1 createacct username=cptest domain=cptest.tld password=" . $rndpass . " pkgname=my_package savepgk=1 maxpark=unlimited maxaddon=unlimited" ) and not $FORCE ) {
         print_warn(q[Failed to create primary account (cptest.tld), skipping additional configurations for the account]);
         return 1;
     }
@@ -846,10 +904,28 @@ sub update_tweak_settings {
 # append aliases directly into STDIN upon login
 sub add_custom_bashrc_to_bash_profile {
 
+    my $txt;
     print_vms("Updating '/root/.bash_profile with help aliases");
-    my $txt = q[ source /dev/stdin <<< "$(curl -s https://ssp.cpanel.net/aliases/aliases.txt)" ];
     open( my $fh, ">>", '/root/.bash_profile' ) or die $!;
-    print $fh "$txt\n";
+
+    # returns -1 if the user did not define this argument
+    if ( $#BASHURL != -1 ) {
+
+        # allows for the user to only issue --bashurl and provide a comma separated list as well
+        @BASHURL = split( /,/, join( ',', @BASHURL ) );
+
+        # iterate through the list of URLs and append them to '/root/.bash_profile'
+        foreach my $url (@BASHURL) {
+            $txt = q[ source /dev/stdin <<< "$(curl -s ] . $url . q[ )" ];
+            print $fh "$txt\n";
+        }
+    }
+
+    else {
+        $txt = q[ source /dev/stdin <<< "$(curl -s https://ssp.cpanel.net/aliases/aliases.txt)" ];
+        print $fh "$txt\n";
+    }
+
     close $fh;
 
     return 1;
@@ -891,10 +967,10 @@ sub get_answer {
 
     my $question = shift;
 
-    if ($fast) {
+    if ($FAST) {
         return 'n';
     }
-    elsif ($full) {
+    elsif ($FULL) {
         return 'y';
     }
     else {
@@ -922,8 +998,8 @@ sub clean_exit {
     # this is ugly and not helpful in regards to script output
     # _cat_file('/etc/motd');
     print "\n";
-    if ($cltrue) {
-        print_info("You should log out and back in.\n");    # since $cltrue is temporarily disabled
+    if ($CLTRUE) {
+        print_info("You should log out and back in.\n");    # since $CLTRUE is temporarily disabled
 
         #        print_info("CloudLinux installed! A reboot is required!\n");
     }
@@ -1076,5 +1152,82 @@ sub set_local_mysql_root_password {
     my $pw = _genpw();
     system_formatted("/usr/local/cpanel/bin/whmapi1 set_local_mysql_root_password password=$pw");
 
+    return 1;
+}
+
+# takes a hostname to set the system to as an argument and potentially updates the hostname
+# returns the new hostname
+sub set_hostname {
+
+    my $hn = shift;
+
+    if ( defined $HOSTNAME ) {
+        $hn = $HOSTNAME;
+    }
+
+    if ( not $SKIPHOSTNAME ) {
+        print_vms("Setting hostname to $hn");
+
+        # use whmapi1 to set hostname so that we get a return value
+        # this will be important when we start processing output to ensure these calls succeed
+        # https://documentation.cpanel.net/display/SDK/WHM+API+1+Functions+-+sethostname
+        system_formatted("/usr/local/cpanel/bin/whmapi1 sethostname hostname=$hn");
+    }
+
+    else {
+        print_info("skiphostname passed, using current hostname to update configuration files");
+
+        # system_formatted will not work here since it returns 1 or 0 depending on whether or not it succeeds
+        # using qx[] instead to get the output of the command
+        $hn = qx[/bin/hostname];
+    }
+
+    return $hn;
+}
+
+# only runs if the --tier option is passed
+# overwrites '/etc/cpupdate.conf' with the new tier and enables daily updates if it is
+sub configure_etc_cpupdate_conf {
+
+    print_vms("Updating /etc/cpupdate.conf");
+    open( my $fh, '>', '/etc/cpupdate.conf' )
+      or die $!;
+    print $fh "CPANEL=$TIER\n";
+    print $fh "RPMUP=daily\n";
+    print $fh "SARULESUP=daily\n";
+    print $fh "STAGING_DIR=/usr/local/cpanel\n";
+    print $fh "UPDATES=daily\n";
+    close($fh);
+
+    return 1;
+}
+
+# disable the ea4-experimental repository
+# only should be ran if yum install succeeds
+sub disable_ea4_experimental {
+    if ( -e '/etc/yum.repos.d/EA4-experimental.repo' ) {
+
+        print_vms("Installed and disabled EA4-experimental repository");
+
+        open( my $read, '<', '/etc/yum.repos.d/EA4-experimental.repo' )
+          or die $!;
+        open( my $write, '>', '/etc/yum.repos.d/EA4-experimental.repo.vmstmp' )
+          or die $!;
+
+        while (<$read>) {
+            if ( $_ =~ /^enabled/ ) {
+                print $write "enabled=0\n";
+            }
+
+            else {
+                print $write $_;
+            }
+        }
+
+        close $read;
+        close $write;
+
+        rename( '/etc/yum.repos.d/EA4-experimental.repo.vmstmp', '/etc/yum.repos.d/EA4-experimental.repo' );
+    }
     return 1;
 }
