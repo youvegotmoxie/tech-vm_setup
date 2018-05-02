@@ -15,28 +15,48 @@ use Term::ANSIColor qw(:constants);
 # reset colors to default when done
 $Term::ANSIColor::AUTORESET = 1;
 
-my $VERSION = '1.0.4';
+my $VERSION = '1.0.5';
 
 # declare variables for script options and handle them
-my ( $HELP, $VERBOSE, $FULL, $FAST, $FORCE, $CLTRUE, $SKIPYUM, $SKIPHOSTNAME, $HOSTNAME, $TIER );
+my ( $HELP, $VERBOSE, $FULL, $FAST, $FORCE, $CLTRUE, $SKIPYUM, $SKIPHOSTNAME, $HOSTNAME, $TIER, $SKIP );
+my ( $CLAM, $MUNIN, $SOLR, $QUOTA, $PDNS );
 my @BASHURL;
 GetOptions(
-    "help"         => \$HELP,
-    "verbose"      => \$VERBOSE,
-    "full"         => \$FULL,
-    "fast"         => \$FAST,
-    "force"        => \$FORCE,
-    "installcl"    => \$CLTRUE,
-    "skipyum"      => \$SKIPYUM,
-    "skiphostname" => \$SKIPHOSTNAME,
-    "hostname=s"   => \$HOSTNAME,
-    "tier=s"       => \$TIER,
-    "bashurl=s"    => \@BASHURL,
+    "help"          => \$HELP,
+    "verbose"       => \$VERBOSE,
+    "full"          => \$FULL,
+    "fast"          => \$FAST,
+    "force"         => \$FORCE,
+    "installcl"     => \$CLTRUE,
+    "skipyum"       => \$SKIPYUM,
+    "skiphostname"  => \$SKIPHOSTNAME,
+    "hostname=s"    => \$HOSTNAME,
+    "tier=s"        => \$TIER,
+    "skip"          => \$SKIP,
+    "clam"          => \$CLAM,
+    "munin"         => \$MUNIN,
+    "solr"          => \$SOLR,
+    "enable-quotas" => \$QUOTA,
+    "pdns"          => \$PDNS,
+    "bashurl=s"     => \@BASHURL,
 ) or die($!);
+
+# --skip should be a shortcut for --fast --skipyum and --skiphostname
+# if it is setup, then it is like passing the following options
+if ($SKIP) {
+    $FAST         = 1;
+    $SKIPYUM      = 1;
+    $SKIPHOSTNAME = 1;
+}
 
 # do not allow the script to run if mutually exclusive arguments are passed
 if ( defined $SKIPHOSTNAME && defined $HOSTNAME ) {
     die "script usage:  skiphostname and hostname arguments are mutually exclusive\n";
+}
+
+# --fast and --full should be mutually exclusive arguments
+if ( defined $FULL && defined $FAST ) {
+    die "script usage:  fast and full arguments are mutually exclusive\n";
 }
 
 # declare global variables for script
@@ -137,7 +157,7 @@ if ( not create_account( "reseller", 1, "root" ) ) {
 update_tweak_settings();
 disable_cphulkd();
 
-# user has option to run upcp and check_cpanel_rpms
+# user has the option to make install additional components such as clamav
 # this takes user input if necessary and executes these two processes if desired
 handle_additional_options();
 
@@ -211,7 +231,11 @@ exit;
 # print_help_and_exit() - ran if --help is passed - prints script usage/info and exits
 # check_license() - perform a cPanel license check and die if it does not succeed
 # handle_lock_file() - exit if lock file exists and --force is not passed, otherwise, create lock file
-# handle_additional_options() - the script user has option to run a cPanel update and check_cpanel_rpms.  This executes these processes if the user desires
+# handle_additional_options() - the script user has the option to install additional software such as clam, this script handles those options
+# clam_and_munin_options() - offer to install clamav and munin and install them if the user desires
+# solr_option() - offer to install solr and install it if the user desires
+# quotas_option() - offer to enable quotas and run fixquotas if the user desires
+# pdns_option() - offer to switch to use PowerDNS and switch the nameserver to PowerDNS if the user desires
 # clean_exit() - print some helpful output for the user before exiting
 #
 # setup_resolv_conf() - sets '/etc/resolv.conf' to use cPanel resolvers
@@ -239,6 +263,8 @@ exit;
 # print_info() - color formatted output to make script output look better
 # print_question() - color formatted output to make script output look better
 # print_command() - color formatted output to make script output look better
+# print_header() - color formatted output to make print_help_and_exit() look better
+# print_status() - color formatted output to make print_help_and_exit() look better
 #
 # _gen_pw() - returns a 25 char rand pw
 # _stdin() - returns a string taken from STDIN
@@ -472,45 +498,70 @@ sub _stdin {
     return $string;
 }
 
+# used to make print_help_and_exit() more presentable
+sub print_header {
+    my $text = shift;
+    print BOLD CYAN "$text\n";
+
+    return 1;
+}
+
+# used to make print_help_and_exit() more presentable
+sub print_status {
+    my $text = shift;
+    print YELLOW "$text\n";
+
+    return 1;
+}
+
 # print script usage information and exit
 sub print_help_and_exit {
-    print "Usage: perl vm_setup.pl [options]\n\n";
+    print_info("Usage: /usr/local/cpanel/3rdparty/bin/perl vm_setup.pl [options]");
+    print "\n";
     print "Description: Performs a number of functions to prepare VMs (on service.cpanel.ninja) for immediate use. \n\n";
-    print "Options: \n";
+    print_header("Options:");
     print "-------------- \n";
-    print "--force: Ignores previous run check\n";
-    print "--fast: Skips all optional setup functions\n";
-    print "--verbose: pretty self explanatory\n";
-    print "--full: Passes yes to all optional setup functions\n";
-    print "--installcl: Installs CloudLinux(can take a while and requires reboot)\n";
-    print "--skipyum:  Skips installing yum packages\n";
-    print "--skiphostname:  Skips setting the hostname\n";
-    print "--hostname=\$hostname:  allows user to provide a hostname for the system\n";
-    print "--tier=\$cpanel_tier:  allows user to provide a cPanel update tier for the server to be set to and enables daily updates\n";
-    print "--bashurl=\$URL_to_bash_file:  allows user to provide the URL to their own bashrc file rather than using the script's default one located at https://ssp.cpanel.net/aliases/aliases.txt\n";
-    print "                              this option can be passed multiple times for more than one bashrc file and/or accept a ',' separated list as well.\n";
+    print_status("--force: Ignores previous run check");
+    print_status("--fast: Skips all optional setup functions");
+    print_status("--verbose: pretty self explanatory");
+    print_status("--full: Passes yes to all optional setup functions");
+    print_status("--installcl: Installs CloudLinux(can take a while and requires reboot)");
+    print_status("--skipyum:  Skips installing yum packages");
+    print_status("--skiphostname:  Skips setting the hostname");
+    print_status("--hostname=\$hostname:  allows user to provide a hostname for the system");
+    print_status("--tier=\$cpanel_tier:  allows user to provide a cPanel update tier for the server to be set to and enables daily updates");
+    print_status("--bashurl=\$URL_to_bash_file:  allows user to provide the URL to their own bashrc file rather than using the script's default one located at https://ssp.cpanel.net/aliases/aliases.txt");
+    print_status("                              this option can be passed multiple times for more than one bashrc file and/or accept a ',' separated list as well.");
+    print_status("--skip:  shortcut to passing --fast --skipyum --skiphostname");
+    print_status("--clam:  install ClamAV regardless of --fast/--skip option being passed");
+    print_status("--munin:  install Munin regardless of --fast/--skip option being passed");
+    print_status("--solr:  install Solr regardless of --fast/--skip option being passed");
+    print_status("--enable-quotas:  enable quotas regardless of --fast/--skip option being passed");
+    print_status("--pdns:  switch nameserver to PowerDNS regardless of --fast/--skip option being passed");
     print "\n";
-    print "Note: --skiphostname and --hostname=\$hostname are mutually exclusive\n";
+    print_info("--skiphostname and --hostname=\$hostname are mutually exclusive");
+    print_info("--fast and --full arguments are mutually exclusive");
     print "\n";
-    print "Full list of things this does: \n";
+    print_header("Full list of things this does:");
     print "-------------- \n";
-    print "- Installs common/useful packages\n";
-    print "- Install the ea4-experimental repository and disables it\n";
-    print "- Sets hostname\n";
-    print "- Updates /var/cpanel/cpanel.config (Tweak Settings)\n";
-    print "- Performs basic setup wizard\n";
-    print "- Fixes /etc/hosts\n";
-    print "- Fixes screen permissions\n";
-    print "- Sets local mysql password to ensure mysql access\n";
-    print "- Creates test account (with email and database)\n";
-    print "- Disables cphulkd\n";
-    print "- Creates api key\n";
-    print "- Updates motd\n";
-    print "- Sets unlimited bash history\n";
-    print "- Creates /root/.bash_profile with helpful aliases\n";
-    print "- Runs upcp (optional)\n";
-    print "- Runs check_cpanel_rpms --fix (optional)\n";
-    print "- Downloads and runs cldeploy (Installs CloudLinux) --installcl (optional)\n";
+    print_status("- Installs common/useful packages");
+    print_status("- Install the ea4-experimental repository and disables it");
+    print_status("- Sets hostname");
+    print_status("- Updates /var/cpanel/cpanel.config (Tweak Settings)");
+    print_status("- Performs basic setup wizard");
+    print_status("- Fixes /etc/hosts");
+    print_status("- Fixes screen permissions");
+    print_status("- Sets local mysql password to ensure mysql access");
+    print_status("- Creates test account (with email and database)");
+    print_status("- Disables cphulkd");
+    print_status("- Creates api key");
+    print_status("- Updates motd");
+    print_status("- Sets unlimited bash history");
+    print_status("- Creates /root/.bash_profile with helpful aliases");
+    print_status("- This includes a script that will allow for git auto-completion");
+    print_status("- Installs ClamAV, Munin, and Solr (optional)");
+    print_status("- Switches the nameserver to PowerDNS (optional)");
+    print_status("- Downloads and runs cldeploy (Installs CloudLinux) --installcl (optional)");
     exit;
 }
 
@@ -694,9 +745,10 @@ sub install_packages {
     # install useful yum packages
     # added perl-CDB_FILE to be installed through yum instead of cpanm
     # per request, enabling the ea4-experimental repo
-    print_vms("Installing utilities via yum [ mtr nmap telnet nc vim s3cmd bind-utils pwgen jwhois git moreutils tmux rpmrebuild rpm-build gdb perl-CDB_File perl-JSON ea4-experimental ] (this may take a couple minutes)");
+    # adding git-extras to help automate some git tasks:  https://github.com/tj/git-extras
+    print_vms("Installing utilities via yum [ mtr nmap telnet nc vim s3cmd bind-utils pwgen jwhois git moreutils tmux rpmrebuild rpm-build gdb perl-CDB_File perl-JSON ea4-experimental git-extras ] (this may take a couple minutes)");
     ensure_working_rpmdb();
-    system_formatted('/usr/bin/yum -y install mtr nmap telnet nc vim s3cmd bind-utils pwgen jwhois git moreutils tmux rpmrebuild rpm-build gdb perl-CDB_File perl-JSON ea4-experimental');
+    system_formatted('/usr/bin/yum -y install mtr nmap telnet nc vim s3cmd bind-utils pwgen jwhois git moreutils tmux rpmrebuild rpm-build gdb perl-CDB_File perl-JSON ea4-experimental git-extras');
 
     return 1;
 }
@@ -926,6 +978,10 @@ sub add_custom_bashrc_to_bash_profile {
         print $fh "$txt\n";
     }
 
+    # add script to provide git auto-completion
+    $txt = q[ source /dev/stdin <<< "$(curl -s https://raw.githubusercontent.com/git/git/master/contrib/completion/git-completion.bash)" ];
+    print $fh "$txt\n";
+
     close $fh;
 
     return 1;
@@ -940,23 +996,111 @@ sub disable_cphulkd {
     return 1;
 }
 
-# user has option to run upcp and check_cpanel_rpms
-# this takes user input if necessary and executes these two processes if desired
+# RPM versions system documentation
+# https://documentation.cpanel.net/display/68Docs/RPM+Targets
+# https://documentation.cpanel.net/display/68Docs/The+update_local_rpm_versions+Script
+# offer to install clamav and munin
+sub clam_and_munin_options {
+
+    my $answer     = 0;
+    my $check_rpms = 0;
+
+    if ($CLAM) {
+        $answer = 'y';
+    }
+    else {
+        $answer = get_answer("would you like to install ClamAV? [n]: ");
+    }
+    if ( $answer eq "y" ) {
+        $check_rpms = 1;
+        print_vms("Setting ClamAV to installed");
+        system_formatted('/usr/local/cpanel/scripts/update_local_rpm_versions --edit target_settings.clamav installed');
+    }
+
+    if ($MUNIN) {
+        $answer = 'y';
+    }
+    else {
+        $answer = get_answer("would you like to install Munin? [n]: ");
+    }
+    if ( $answer eq "y" ) {
+        $check_rpms = 1;
+        print_vms("Setting Munin to installed");
+        system_formatted('/usr/local/cpanel/scripts/update_local_rpm_versions --edit target_settings.munin installed');
+    }
+
+    if ($check_rpms) {
+        print_vms("running check_cpanel_rpms to install additional packages (This may take a few minutes)");
+        system_formatted('/usr/local/cpanel/scripts/check_cpanel_rpms --fix');
+    }
+
+    return 1;
+}
+
+# offer to install solr
+sub solr_option {
+
+    my $answer = 0;
+
+    if ($SOLR) {
+        $answer = 'y';
+    }
+    else {
+        $answer = get_answer("would you like to install cPanel Solr? [n]: ");
+    }
+    if ( $answer eq "y" ) {
+        print_vms("Installing cPanel Solr (This may take a few minutes)");
+        system_formatted('/usr/local/cpanel/scripts/install_dovecot_fts');
+    }
+
+    return 1;
+}
+
+sub quotas_option {
+
+    my $answer = 0;
+
+    if ($QUOTA) {
+        $answer = 'y';
+    }
+    else {
+        $answer = get_answer("would you like to enable quotas? [n]: ");
+    }
+    if ( $answer eq "y" ) {
+        $QUOTA = 1;    # so that clean_exit() knows that quotas were enabled
+        print_vms("Enabling quotas (This may take a few minutes)");
+        system_formatted('/usr/local/cpanel/scripts/fixquotas');
+    }
+
+    return 1;
+}
+
+sub pdns_option {
+
+    my $answer = 0;
+
+    if ($PDNS) {
+        $answer = 'y';
+    }
+    else {
+        $answer = get_answer("would you like to switch your nameserver to use PowerDNS? [n]: ");
+    }
+    if ( $answer eq "y" ) {
+        print_vms("Switching nameserver to use PowerDNS (This may take a few minutes)");
+        system_formatted('/usr/local/cpanel/scripts/setupnameserver powerdns');
+    }
+
+    return 1;
+}
+
+# user has the option to install additional software such as clamav
+# this takes user input if necessary and performs necessary tasks
 sub handle_additional_options {
 
-    # upcp first
-    my $answer = get_answer("would you like to run upcp now? [n]: ");
-    if ( $answer eq "y" ) {
-        print_vms("Running upcp");
-        system_formatted('/scripts/upcp');
-    }
-
-    # check_cpanel_rpms second
-    $answer = get_answer("would you like to run check_cpanel_rpms now? [n]: ");
-    if ( $answer eq "y" ) {
-        print_vms("Running check_cpanel_rpms");
-        system_formatted('/scripts/check_cpanel_rpms --fix');
-    }
+    clam_and_munin_options();
+    solr_option();
+    quotas_option();
+    pdns_option();
 
     return 1;
 }
@@ -998,10 +1142,8 @@ sub clean_exit {
     # this is ugly and not helpful in regards to script output
     # _cat_file('/etc/motd');
     print "\n";
-    if ($CLTRUE) {
-        print_info("You should log out and back in.\n");    # since $CLTRUE is temporarily disabled
-
-        #        print_info("CloudLinux installed! A reboot is required!\n");
+    if ( $CLTRUE || $QUOTA ) {
+        print_info("A reboot is required for all the changes performed by this script to take affect!!!\n");
     }
     else {
         print_info("You should log out and back in.\n");
