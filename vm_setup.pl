@@ -15,7 +15,12 @@ use Term::ANSIColor qw(:constants);
 # reset colors to default when done
 $Term::ANSIColor::AUTORESET = 1;
 
-my $VERSION = '1.0.5';
+# VMS should only be ran as root
+if ( $< != 0 ) {
+    die "VMS must be run as root\n";
+}
+
+my $VERSION = '1.0.6';
 
 # declare variables for script options and handle them
 my ( $HELP, $VERBOSE, $FULL, $FAST, $FORCE, $CLTRUE, $SKIPYUM, $SKIPHOSTNAME, $HOSTNAME, $TIER, $SKIP );
@@ -128,6 +133,7 @@ configure_sysconfig_network($hostname);
 configure_wwwacct_conf( $hostname, $natip );
 configure_mainip($natip);
 configure_whostmgrft();    # this is really just touching the file in order to skip initial WHM setup
+disable_feature_showcase();
 configure_etc_hosts( $hostname, $ip );
 
 append_history_options_to_bashrc();
@@ -217,6 +223,7 @@ exit;
 #
 # system_formatted() - takes a system call as an argument and uses open3() to make the syscall
 # add_motd() - appends all arguments to '/etc/motd'
+# add_bashrc() - appends all arguments to '/root/.bashrc'
 # get_sysinfo() - populates %sysinfo hash with data
 # install_packages() - installs some useful yum packages
 # set_hostname() - returns the new hostname of the server after potentially setting it
@@ -243,6 +250,7 @@ exit;
 # configure_sysconfig_network() - ensure '/etc/sysconfig/network' has proper contents
 # configure_mainip() - ensure '/var/cpanel/mainip' has proper contents
 # configure_whostmgrft() - touch '/etc/.whostmgrft' to skip initial WHM setup
+# disable_feature_showcase() - touch '/var/cpanel/activate/features/disable_feature_showcase' to disable the feature showcase
 # configure_wwwacct_conf() - ensure '/etc/wwwacct.conf' has proper contents
 # configure_etc_hosts() - ensure '/etc/hosts' has proper contents
 # add_custom_bashrc_to_bash_profile() - append command to '/etc/.bash_profile' that changes source to https://ssp.cpanel.net/aliases/aliases.txt upon login
@@ -307,7 +315,9 @@ sub _process_whmapi_output {
 
         if ( $line =~ /^\s*token:/ ) {
             ( $key, $value ) = split /:/, $line;
-            add_motd( "Token name - all_access: " . $value . "\n" );
+            chomp($value);
+            my $text = q [echo "Token name - all_access:  ];
+            add_bashrc( $text, $value, "\"\necho\n" );
         }
     }
 
@@ -481,6 +491,15 @@ sub _genpw {
     return $gen->randregex('\w{25}');
 }
 
+# appends argument(s) to the end of /etc/.bashrc
+sub add_bashrc {
+    open( my $fh, ">>", '/root/.bashrc' ) or die $!;
+    print $fh "@_\n";
+    close $fh;
+
+    return 1;
+}
+
 # appends argument(s) to the end of /etc/motd
 sub add_motd {
     open( my $etc_motd, ">>", '/etc/motd' ) or die $!;
@@ -549,6 +568,7 @@ sub print_help_and_exit {
     print_status("- Sets hostname");
     print_status("- Updates /var/cpanel/cpanel.config (Tweak Settings)");
     print_status("- Performs basic setup wizard");
+    print_status("- Disables feature showcase");
     print_status("- Fixes /etc/hosts");
     print_status("- Fixes screen permissions");
     print_status("- Sets local mysql password to ensure mysql access");
@@ -746,9 +766,9 @@ sub install_packages {
     # added perl-CDB_FILE to be installed through yum instead of cpanm
     # per request, enabling the ea4-experimental repo
     # adding git-extras to help automate some git tasks:  https://github.com/tj/git-extras
-    print_vms("Installing utilities via yum [ mtr nmap telnet nc vim s3cmd bind-utils pwgen jwhois git moreutils tmux rpmrebuild rpm-build gdb perl-CDB_File perl-JSON ea4-experimental git-extras ] (this may take a couple minutes)");
+    print_vms("Installing utilities via yum [ mtr nmap telnet nc vim s3cmd bind-utils pwgen jwhois git moreutils tmux rpmrebuild rpm-build gdb perl-CDB_File perl-JSON ea4-experimental git-extras perl-Net-DNS ] (this may take a couple minutes)");
     ensure_working_rpmdb();
-    system_formatted('/usr/bin/yum -y install mtr nmap telnet nc vim s3cmd bind-utils pwgen jwhois git moreutils tmux rpmrebuild rpm-build gdb perl-CDB_File perl-JSON ea4-experimental git-extras');
+    system_formatted('/usr/bin/yum -y install mtr nmap telnet nc vim s3cmd bind-utils pwgen jwhois git moreutils tmux rpmrebuild rpm-build gdb perl-CDB_File perl-JSON ea4-experimental git-extras perl-Net-DNS');
 
     return 1;
 }
@@ -794,6 +814,12 @@ sub configure_mainip {
       or die $!;
     print $fh "$nat";
     close($fh);
+    return 1;
+}
+
+# touches '/var/cpanel/activate/features/disable_feature_showcase'
+sub disable_feature_showcase {
+    _create_touch_file('/var/cpanel/activate/features/disable_feature_showcase');
     return 1;
 }
 
@@ -912,7 +938,7 @@ sub create_primary_account {
 
     my $rndpass;
 
-    add_motd( "one-liner for access to WHM root access:\n", q(IP=$(awk '{print$2}' /var/cpanel/cpnat); URL=$(whmapi1 create_user_session user=root service=whostmgrd | awk '/url:/ {match($2,"/cpsess.*",URL)}END{print URL[0]}'); echo "https://$IP:2087$URL"), "\n" );
+    add_motd( "one-liner for access to WHM root access:\n", q(USER=root; IP=$(awk '{print$2}' /var/cpanel/cpnat); URL=$(whmapi1 create_user_session user=$USER service=whostmgrd | awk '/url:/ {match($2,"/cpsess.*",URL)}END{print URL[0]}'); echo "https://$IP:2087$URL"), "\n" );
 
     # create test account
     print_vms("Creating test account - cptest");
@@ -922,12 +948,12 @@ sub create_primary_account {
         return 1;
     }
 
-    add_motd( "one-liner for access to cPanel user: cptest\n", q(IP=$(awk '{print$2}' /var/cpanel/cpnat); URL=$(whmapi1 create_user_session user=cptest service=cpaneld | awk '/url:/ {match($2,"/cpsess.*",URL)}END{print URL[0]}'); echo "https://$IP:2083$URL"), "\n" );
+    add_motd( "one-liner for access to cPanel user: cptest\n", q(USER=cptest; IP=$(awk '{print$2}' /var/cpanel/cpnat); URL=$(whmapi1 create_user_session user=$USER service=cpaneld | awk '/url:/ {match($2,"/cpsess.*",URL)}END{print URL[0]}'); echo "https://$IP:2083$URL"), "\n" );
 
     print_vms("Creating test email - testing\@cptest.tld");
     $rndpass = _genpw();
     system_formatted( "/usr/local/cpanel/bin/uapi --user=cptest Email add_pop email=testing\@cptest.tld password=" . $rndpass );
-    add_motd( "one-liner for access to test email account: testing\@cptest.tld\n", q(IP=$(awk '{print$2}' /var/cpanel/cpnat); URL=$(whmapi1 create_user_session user=testing@cptest.tld service=webmaild | awk '/url:/ {match($2,"/cpsess.*",URL)}END{print URL[0]}'); echo "https://$IP:2096$URL"), "\n" );
+    add_motd( "one-liner for access to test email account: testing\@cptest.tld\n", q(USER='testing@cptest.tld'; IP=$(awk '{print$2}' /var/cpanel/cpnat); URL=$(whmapi1 create_user_session user=$USER service=webmaild | awk '/url:/ {match($2,"/cpsess.*",URL)}END{print URL[0]}'); echo "https://$IP:2096$URL"), "\n" );
 
     print_vms("Creating test database - cptest_testdb");
     system_formatted("/usr/local/cpanel/bin/uapi --user=cptest Mysql create_database name=cptest_testdb");
@@ -1278,11 +1304,7 @@ sub print_command {
 # adds two options to '/root/.bashrc' to allow for unlimited bash history
 sub append_history_options_to_bashrc {
 
-    open( my $fh, ">>", '/root/.bashrc' ) or die $!;
-    print $fh "export HISTFILESIZE= \n";
-    print $fh "export HISTSIZE=\n";
-    close $fh;
-
+    add_bashrc("export HISTFILESIZE= \nexport HISTSIZE=\n");
     return 1;
 }
 
