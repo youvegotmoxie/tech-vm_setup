@@ -2,6 +2,8 @@
 
 # vm_setup.pl
 
+package VMS;
+
 use strict;
 use warnings;
 use Getopt::Long;
@@ -20,7 +22,7 @@ if ( $< != 0 ) {
     die "VMS must be run as root\n";
 }
 
-my $VERSION = '1.0.9';
+my $VERSION = '2.0.0';
 
 # declare variables for script options and handle them
 my @bashurl;
@@ -51,108 +53,116 @@ if ( exists $opts{full} && exists $opts{fast} ) {
 # of script and their necessity should be reviewed during TECH-407
 my $VMS_LOG = '/var/log/vm_setup.log';
 
-# print header
-print "\n";
-print_vms("VM Server Setup Script");
-print_vms("Version: $VERSION\n");
+__PACKAGE__->run(@ARGV) unless caller();
 
-# help option should be processed first to ensure that nothing is erroneously executed if this option is passed
-# converted this to a function to make main less clunky and it may be of use if we add more script arguments in the future
-#  ex:  or die print_help_and_exit();
-if ( exists $opts{help} ) {
-    print_help_and_exit();
+# Every below this should be a subroutine
+1;
+
+sub run {
+
+    # print header
+    print "\n";
+    print_vms("VM Server Setup Script");
+    print_vms("Version: $VERSION\n");
+
+    # help option should be processed first to ensure that nothing is erroneously executed if this option is passed
+    # converted this to a function to make main less clunky and it may be of use if we add more script arguments in the future
+    #  ex:  or die print_help_and_exit();
+    if ( exists $opts{help} ) {
+        print_help_and_exit();
+    }
+
+    # vm_setup depends on multiple cPanel api calls
+    # if the license is invalid, we should immediately die
+    check_license();
+
+    # we should check for the lock file and exit if force argument not passed right after checking for help
+    # to ensure that no work is performed in this scenario
+    handle_lock_file();
+
+    create_vms_log_file();
+
+    setup_resolv_conf();
+
+    install_packages();
+    set_screen_perms();
+
+    configure_etc_cpupdate_conf() if ( exists $opts{tier} );
+
+    # '/vat/cpanel/cpnat' is sometimes populated with incorrect IP information
+    # on new openstack builds
+    # build cpnat to ensure that '/var/cpanel/cpnat' has the correct IPs in it
+    print_vms("Building cpnat");
+    system_formatted("/usr/local/cpanel/scripts/build_cpnat");
+
+    # use a hash for system information
+    my %sysinfo = (
+        "ostype"    => undef,
+        "osversion" => undef,
+        "tier"      => undef,
+        "hostname"  => undef,
+        "ip"        => undef,
+        "natip"     => undef,
+    );
+
+    # hostname is in the format of 'os.cptier.tld'
+    get_sysinfo( \%sysinfo );
+
+    my $natip = $sysinfo{'natip'};
+    my $ip    = $sysinfo{'ip'};
+
+    # set_hostname() will return the value of the new hostname for the server
+    # and the value may not be the same as what is in %sysinfo
+    my $hostname = set_hostname( $sysinfo{'hostname'} );
+
+    # edit files with the new hostname
+    configure_99_hostname_cfg($hostname);
+    configure_sysconfig_network($hostname);
+    configure_wwwacct_conf( $hostname, $natip );
+    configure_mainip($natip);
+    configure_whostmgrft();    # this is really just touching the file in order to skip initial WHM setup
+    disable_feature_showcase();
+    configure_etc_hosts( $hostname, $ip );
+
+    append_history_options_to_bashrc();
+    add_custom_bashrc_to_bash_profile();
+
+    # set env variable
+    # I am not entirely sure what we need this for or if it is even needed
+    # leaving for now but will need to be reevaluated in later on
+    local $ENV{'REMOTE_USER'} = 'root';
+
+    # ensure mysql is running and accessible before creating account
+    set_local_mysql_root_password();
+
+    # header message for '/etc/motd' placed here to ensure it is added before anything else
+    add_motd("\n\nVM Setup Script created the following test accounts:\n");
+
+    create_api_token();
+
+    # create cptest account along with a test email account and database
+    create_primary_account();
+
+    # create a reseller account and an account owned by the reseller account
+    if ( not create_account( "reseller", 1, "root" ) ) {
+        create_account( "owned", 0, "reseller" );
+    }
+
+    update_tweak_settings();
+    disable_cphulkd();
+
+    # user has the option to make install additional components such as clamav
+    # this takes user input if necessary and executes these two processes if desired
+    handle_additional_options();
+
+    # restart cpsrvd
+    restart_cpsrvd();
+
+    final_words();
+
+    # since this is now a modulino, return instead of exit
+    return 1;
 }
-
-# vm_setup depends on multiple cPanel api calls
-# if the license is invalid, we should immediately die
-check_license();
-
-# we should check for the lock file and exit if force argument not passed right after checking for help
-# to ensure that no work is performed in this scenario
-handle_lock_file();
-
-create_vms_log_file();
-
-setup_resolv_conf();
-
-install_packages();
-set_screen_perms();
-
-configure_etc_cpupdate_conf() if ( exists $opts{tier} );
-
-# '/vat/cpanel/cpnat' is sometimes populated with incorrect IP information
-# on new openstack builds
-# build cpnat to ensure that '/var/cpanel/cpnat' has the correct IPs in it
-print_vms("Building cpnat");
-system_formatted("/usr/local/cpanel/scripts/build_cpnat");
-
-# use a hash for system information
-my %sysinfo = (
-    "ostype"    => undef,
-    "osversion" => undef,
-    "tier"      => undef,
-    "hostname"  => undef,
-    "ip"        => undef,
-    "natip"     => undef,
-);
-
-# hostname is in the format of 'os.cptier.tld'
-get_sysinfo( \%sysinfo );
-
-my $natip = $sysinfo{'natip'};
-my $ip    = $sysinfo{'ip'};
-
-# set_hostname() will return the value of the new hostname for the server
-# and the value may not be the same as what is in %sysinfo
-my $hostname = set_hostname( $sysinfo{'hostname'} );
-
-# edit files with the new hostname
-configure_99_hostname_cfg($hostname);
-configure_sysconfig_network($hostname);
-configure_wwwacct_conf( $hostname, $natip );
-configure_mainip($natip);
-configure_whostmgrft();    # this is really just touching the file in order to skip initial WHM setup
-disable_feature_showcase();
-configure_etc_hosts( $hostname, $ip );
-
-append_history_options_to_bashrc();
-add_custom_bashrc_to_bash_profile();
-
-# set env variable
-# I am not entirely sure what we need this for or if it is even needed
-# leaving for now but will need to be reevaluated in later on
-local $ENV{'REMOTE_USER'} = 'root';
-
-# ensure mysql is running and accessible before creating account
-set_local_mysql_root_password();
-
-# header message for '/etc/motd' placed here to ensure it is added before anything else
-add_motd("\n\nVM Setup Script created the following test accounts:\n");
-
-create_api_token();
-
-# create cptest account along with a test email account and database
-create_primary_account();
-
-# create a reseller account and an account owned by the reseller account
-if ( not create_account( "reseller", 1, "root" ) ) {
-    create_account( "owned", 0, "reseller" );
-}
-
-update_tweak_settings();
-disable_cphulkd();
-
-# user has the option to make install additional components such as clamav
-# this takes user input if necessary and executes these two processes if desired
-handle_additional_options();
-
-# restart cpsrvd
-restart_cpsrvd();
-
-# exit cleanly
-clean_exit();
-
-exit;
 
 ##############  END OF MAIN ##########################
 #
@@ -179,7 +189,7 @@ exit;
 # solr_option() - offer to install solr and install it if the user desires
 # quotas_option() - offer to enable quotas and run fixquotas if the user desires
 # pdns_option() - offer to switch to use PowerDNS and switch the nameserver to PowerDNS if the user desires
-# clean_exit() - print some helpful output for the user before exiting
+# final_words() - print some helpful output for the user before exiting
 #
 # setup_resolv_conf() - sets '/etc/resolv.conf' to use cPanel resolvers
 # configure_99_hostname_cfg() - ensure '/etc/cloud/cloud.cfg.d/99_hostname.cfg' has proper contents
@@ -1016,7 +1026,7 @@ sub quotas_option {
         $answer = get_answer("would you like to enable quotas? [n]: ");
     }
     if ( $answer eq "y" ) {
-        $opts{quota} = 1;    # so that clean_exit() knows that quotas were enabled
+        $opts{quota} = 1;    # so that final_words() knows that quotas were enabled
         print_vms("Enabling quotas (This may take a few minutes)");
         system_formatted('/usr/local/cpanel/scripts/fixquotas');
     }
@@ -1082,8 +1092,8 @@ sub restart_cpsrvd {
     return 1;
 }
 
-# exit cleanly
-sub clean_exit {
+# advise whether a reboot is required or if the user just needs to re-login
+sub final_words {
 
     print "\n";
     print_vms("Setup complete\n");
@@ -1098,7 +1108,7 @@ sub clean_exit {
         print_info("You should log out and back in.\n");
     }
 
-    exit;
+    return 1;
 }
 
 # takes filename as argument and prints output of file to STDOUT
