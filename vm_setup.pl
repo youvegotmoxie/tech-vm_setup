@@ -22,7 +22,7 @@ if ( $< != 0 ) {
     die "VMS must be run as root\n";
 }
 
-my $VERSION = '2.0.0';
+my $VERSION = '2.0.2';
 
 # declare variables for script options and handle them
 my @bashurl;
@@ -161,7 +161,7 @@ sub run {
     final_words();
 
     # since this is now a modulino, return instead of exit
-    return 1;
+    return;
 }
 
 ##############  END OF MAIN ##########################
@@ -227,7 +227,6 @@ sub run {
 # _get_cpanel_tier - called by get_sysinfo() to populate %sysinfo hash with the cPanel tier
 # _get_ostype_and_version() - called by get_sysinfo() to populate %sysinfo hash with the ostype and osversion
 # _cpanel_getsysinfo() - called by get_sysinfo() to ensure that '/var/cpanel/sysinfo.config' is up to date
-# _cat_file() - takes filename as arg and mimics bash cat command
 # _check_license() - works much like system_formatted() but is only intended for the license check
 # _check_for_failure() - looks at output of the license check and dies if it fails
 # _process_whmapi_output() - called by process_output() and processes the output of whmapi1 calls to ensure the call completed successfully and to check for token output
@@ -268,7 +267,7 @@ sub _process_whmapi_output {
     return 0;
 }
 
-# called by process_output() and processes the output of UAPI calls to ensure the call copmleted successfully
+# called by process_output() and processes the output of UAPI calls to ensure the call completed successfully
 # takes the output of a UAPI call as an argument (array)
 # returns 0 if the call succeeds
 # otherwise, it returns a string that contains the reason that the call failed
@@ -332,7 +331,7 @@ sub process_output {
         }
     }
 
-    return 1;
+    return;
 }
 
 # logs the output of the system call
@@ -374,7 +373,7 @@ sub print_formatted {
 
     return 0 if not process_output(@output);
 
-    return 1;
+    return;
 }
 
 # takes a command to make a system call with as an argument
@@ -422,7 +421,7 @@ sub system_formatted {
     }
 
     else {
-        return 1;
+        return;
     }
 }
 
@@ -441,7 +440,7 @@ sub add_motd {
     print $etc_motd "@_\n";
     close $etc_motd;
 
-    return 1;
+    return;
 }
 
 # get stdin from user and return it
@@ -454,18 +453,22 @@ sub _stdin {
 
 # used to make print_help_and_exit() more presentable
 sub print_header {
-    my $text = shift;
-    print BOLD CYAN "$text\n";
+    my $text = shift // '';
 
-    return 1;
+    return if ( $text eq '' );
+
+    print BOLD CYAN "$text\n";
+    return;
 }
 
 # used to make print_help_and_exit() more presentable
 sub print_status {
-    my $text = shift;
-    print YELLOW "$text\n";
+    my $text = shift // '';
 
-    return 1;
+    return if ( $text eq '' );
+
+    print YELLOW "$text\n";
+    return;
 }
 
 # print script usage information and exit
@@ -537,7 +540,7 @@ sub handle_lock_file {
         print_vms("creating lock file");
         _create_touch_file('/root/vmsetup.lock');
     }
-    return 1;
+    return;
 }
 
 # mimic bash touch command
@@ -546,7 +549,7 @@ sub _create_touch_file {
 
     open( my $touch_file, ">", $fn ) or die $!;
     close $touch_file;
-    return 1;
+    return;
 }
 
 # recreate resolv.conf using cPanel resolvers
@@ -556,7 +559,7 @@ sub setup_resolv_conf {
       or die $!;
     print $etc_resolv_conf "search cpanel.net\n" . "nameserver 208.74.121.50\n" . "nameserver 208.74.125.59\n";
     close($etc_resolv_conf);
-    return 1;
+    return;
 }
 
 ###### accepts a reference to a hash
@@ -589,7 +592,7 @@ sub get_sysinfo {
     # get value for keys 'ip' and 'natip'
     _get_ip_and_natip($ref);
 
-    return 1;
+    return;
 }
 
 ###### accepts a reference to a hash
@@ -615,7 +618,7 @@ sub _get_ip_and_natip {
     }
     close $fh;
 
-    return 1;
+    return;
 }
 
 ###### accepts a reference to a hash
@@ -645,7 +648,7 @@ sub _get_cpanel_tier {
     # replace . with - for hostname purposes
     $ref->{'tier'} =~ s/\./-/g;
 
-    return 1;
+    return;
 }
 
 ###### accepts a reference to a hash
@@ -674,7 +677,7 @@ sub _get_ostype_and_version {
         }
     }
     close $fh;
-    return 1;
+    return;
 }
 
 # we need a function to process the output from system_formatted in order to catch and throw exceptions
@@ -683,7 +686,7 @@ sub _cpanel_gensysinfo {
     unlink '/var/cpanel/sysinfo.config';
     _create_touch_file('/var/cpanel/sysinfo.config');
     system_formatted("/usr/local/cpanel/scripts/gensysinfo");
-    return 1;
+    return;
 }
 
 # verifies the integrity of the rpmdb and install some useful yum packages
@@ -692,7 +695,7 @@ sub install_packages {
     # do not install packages if skipyum option is passed
     if ( exists $opts{skipyum} ) {
         print_info("skipyum option passed, no packages were installed");
-        return 1;
+        return;
     }
 
     # install useful yum packages
@@ -703,7 +706,7 @@ sub install_packages {
     ensure_working_rpmdb();
     system_formatted('/usr/bin/yum -y install mtr nmap telnet nc vim s3cmd bind-utils pwgen jwhois git moreutils tmux rpmrebuild rpm-build gdb perl-CDB_File perl-JSON ea4-experimental git-extras perl-Net-DNS');
 
-    return 1;
+    return;
 }
 
 # takes a hostname as an argument
@@ -720,7 +723,7 @@ sub configure_99_hostname_cfg {
         close($cloud_cfg);
     }
 
-    return 1;
+    return;
 }
 
 # takes a hostname as an argument
@@ -734,7 +737,7 @@ sub configure_sysconfig_network {
       or die $!;
     print $etc_network "NETWORKING=yes\n" . "NOZEROCONF=yes\n" . "HOSTNAME=$hn\n";
     close($etc_network);
-    return 1;
+    return;
 }
 
 # takes the systems natip as an argument
@@ -747,19 +750,19 @@ sub configure_mainip {
       or die $!;
     print $fh "$nat";
     close($fh);
-    return 1;
+    return;
 }
 
 # touches '/var/cpanel/activate/features/disable_feature_showcase'
 sub disable_feature_showcase {
     _create_touch_file('/var/cpanel/activate/features/disable_feature_showcase');
-    return 1;
+    return;
 }
 
 # touches '/etc/.whostmgrft'
 sub configure_whostmgrft {
     _create_touch_file('/etc/.whostmgrft');
-    return 1;
+    return;
 }
 
 # takes two arguments
@@ -792,7 +795,7 @@ sub configure_wwwacct_conf {
     print $fh "LOGSTYLE combined\n";
     print $fh "DEFWEBMAILTHEME paper_lantern\n";
     close($fh);
-    return 1;
+    return;
 }
 
 # takes two arguments
@@ -813,7 +816,7 @@ sub configure_etc_hosts {
     print $fh "::1          localhost localhost.localdomain localhost6 localhost6.localdomain6\n";
     print $fh "$local_ip    $short_hn $hn\n";
     close($fh);
-    return 1;
+    return;
 }
 
 # ensure proper screen ownership/permissions
@@ -821,13 +824,13 @@ sub set_screen_perms {
 
     print_vms("Fixing screen perms");
     system_formatted('/bin/rpm --setugids screen && /bin/rpm --setperms screen');
-    return 1;
+    return;
 }
 
 # fixes common issues with rpmdb if they exist
 sub ensure_working_rpmdb {
     system_formatted('/usr/local/cpanel/scripts/find_and_fix_rpm_issues');
-    return 1;
+    return;
 }
 
 # this creates an api token and adds it to '/etc/motd'
@@ -836,7 +839,7 @@ sub create_api_token {
     print_vms("Creating api token");
     system_formatted('/usr/local/cpanel/bin/whmapi1 api_token_create token_name=all_access acl-1=all');
 
-    return 1;
+    return;
 }
 
 # creates account using whmapi1
@@ -857,7 +860,7 @@ sub create_account {
 
     if ( not system_formatted("/usr/local/cpanel/bin/whmapi1 createacct username=$user domain=$user.tld password=$rndpass pkgname=my_package savepgk=1 maxpark=unlimited maxaddon=unlimited reseller=$is_reseller owner=$owner") and not exists $opts{force} ) {
         print_warn("Failed to create account: $user.tld");
-        return 1;
+        return;
     }
 
     return 0;
@@ -878,7 +881,7 @@ sub create_primary_account {
     $rndpass = _genpw();
     if ( not system_formatted( "/usr/local/cpanel/bin/whmapi1 createacct username=cptest domain=cptest.tld password=" . $rndpass . " pkgname=my_package savepgk=1 maxpark=unlimited maxaddon=unlimited" ) and not exists $opts{force} ) {
         print_warn(q[Failed to create primary account (cptest.tld), skipping additional configurations for the account]);
-        return 1;
+        return;
     }
 
     add_motd( "one-liner for access to cPanel user: cptest\n", q(USER=cptest; IP=$(awk '{print$2}' /var/cpanel/cpnat); URL=$(whmapi1 create_user_session user=$USER service=cpaneld | awk '/url:/ {match($2,"/cpsess.*",URL)}END{print URL[0]}'); echo "https://$IP:2083$URL"), "\n" );
@@ -900,7 +903,7 @@ sub create_primary_account {
     print_vms("Adding all privs for cptest_testuser to cptest_testdb");
     system_formatted("/usr/local/cpanel/bin/uapi --user=cptest Mysql set_privileges_on_database user=cptest_testuser database=cptest_testdb privileges='ALL PRIVILEGES'");
 
-    return 1;
+    return;
 }
 
 # update tweak settings to allow creation of nonexistent addon domains
@@ -909,7 +912,7 @@ sub update_tweak_settings {
     print_vms("Updating tweak settings (cpanel.config)");
     system_formatted("/usr/local/cpanel/bin/whmapi1 set_tweaksetting key=allowremotedomains value=1");
     system_formatted("/usr/local/cpanel/bin/whmapi1 set_tweaksetting key=allowunregistereddomains value=1");
-    return 1;
+    return;
 }
 
 # append aliases directly into STDIN upon login
@@ -943,7 +946,7 @@ sub add_custom_bashrc_to_bash_profile {
 
     close $fh;
 
-    return 1;
+    return;
 }
 
 # stop and disable cphulkd
@@ -952,7 +955,7 @@ sub disable_cphulkd {
     print_vms("Disabling cphulkd");
     system_formatted('/usr/local/cpanel/bin/whmapi1 disable_cphulk');
 
-    return 1;
+    return;
 }
 
 # RPM versions system documentation
@@ -993,7 +996,7 @@ sub clam_and_munin_options {
         system_formatted('/usr/local/cpanel/scripts/check_cpanel_rpms --fix');
     }
 
-    return 1;
+    return;
 }
 
 # offer to install solr
@@ -1012,7 +1015,7 @@ sub solr_option {
         system_formatted('/usr/local/cpanel/scripts/install_dovecot_fts');
     }
 
-    return 1;
+    return;
 }
 
 sub quotas_option {
@@ -1031,7 +1034,7 @@ sub quotas_option {
         system_formatted('/usr/local/cpanel/scripts/fixquotas');
     }
 
-    return 1;
+    return;
 }
 
 sub pdns_option {
@@ -1049,7 +1052,7 @@ sub pdns_option {
         system_formatted('/usr/local/cpanel/scripts/setupnameserver powerdns');
     }
 
-    return 1;
+    return;
 }
 
 # user has the option to install additional software such as clamav
@@ -1061,7 +1064,7 @@ sub handle_additional_options {
     quotas_option();
     pdns_option();
 
-    return 1;
+    return;
 }
 
 # takes 1 argument - a string to print to obtain user input if necessary
@@ -1082,14 +1085,14 @@ sub get_answer {
     }
 
     # this should not be possible to reach
-    return 1;
+    return;
 }
 
 sub restart_cpsrvd {
 
     print_vms("Restarting cpsvrd");
     system_formatted("/usr/local/cpanel/scripts/restartsrv_cpsrvd");
-    return 1;
+    return;
 }
 
 # advise whether a reboot is required or if the user just needs to re-login
@@ -1098,8 +1101,6 @@ sub final_words {
     print "\n";
     print_vms("Setup complete\n");
 
-    # this is ugly and not helpful in regards to script output
-    # _cat_file('/etc/motd');
     print "\n";
     if ( exists $opts{quota} ) {
         print_info("A reboot is required for all the changes performed by this script to take affect!!!\n");
@@ -1108,23 +1109,7 @@ sub final_words {
         print_info("You should log out and back in.\n");
     }
 
-    return 1;
-}
-
-# takes filename as argument and prints output of file to STDOUT
-sub _cat_file {
-
-    my $fn = shift;
-    open( my $fh, '<', $fn )
-      or die $!;
-
-    while (<$fh>) {
-        print $_;
-    }
-
-    close $fh;
-
-    return 1;
+    return;
 }
 
 # perform a license check to ensure valid cPanel license
@@ -1132,7 +1117,7 @@ sub check_license {
 
     _check_license("/usr/local/cpanel/cpkeyclt");
 
-    return 1;
+    return;
 }
 
 # works just like system_formatted(), but I split this out specifically for the license check
@@ -1163,18 +1148,18 @@ sub _check_license {
     # wait on child to finish before proceeding
     waitpid( $pid, 0 );
 
-    return 1;
+    return;
 }
 
 # takes a line of output as an argument
 sub _check_for_failure {
 
-    my $line = shift;
+    my $line = shift // '';
 
     # die if the license is not valid
     die("cPanel license is not currently valid.\n") if ( $line =~ /Update Failed!/ );
 
-    return 1;
+    return;
 }
 
 # no arguments needed since $VMS_LOG is a global var
@@ -1184,7 +1169,7 @@ sub create_vms_log_file {
 
     unlink $VMS_LOG;
     _create_touch_file($VMS_LOG);
-    return 1;
+    return;
 }
 
 # append a line to the log file
@@ -1196,42 +1181,52 @@ sub append_vms_log {
     print $fh $line;
     close $fh;
 
-    return 1;
+    return;
 }
 
 sub print_vms {
-    my $text = shift;
+    my $text = shift // '';
+    return if $text eq '';
+
     print BOLD BRIGHT_BLUE ON_BLACK '[VMS] * ';
     print BOLD WHITE ON_BLACK "$text\n";
-    return 1;
+    return;
 }
 
 sub print_warn {
-    my $text = shift;
+    my $text = shift // '';
+    return if $text eq '';
+
     print BOLD RED ON_BLACK '[WARN] * ';
     print BOLD WHITE ON_BLACK "$text\n";
-    return 1;
+    return;
 }
 
 sub print_info {
-    my $text = shift;
+    my $text = shift // '';
+    return if $text eq '';
+
     print BOLD GREEN ON_BLACK '[INFO] * ';
     print BOLD WHITE ON_BLACK "$text\n";
-    return 1;
+    return;
 }
 
 sub print_question {
-    my $text = shift;
+    my $text = shift // '';
+    return if $text eq '';
+
     print BOLD CYAN ON_BLACK '[QUESTION] * ';
     print BOLD WHITE ON_BLACK "$text";
-    return 1;
+    return;
 }
 
 sub print_command {
-    my $text = shift;
+    my $text = shift // '';
+    return if $text eq '';
+
     print BOLD BRIGHT_YELLOW ON_BLACK '[COMMAND] * ';
     print BOLD WHITE ON_BLACK "$text\n";
-    return 1;
+    return;
 }
 
 # adds two options to '/root/.bashrc' to allow for unlimited bash history
@@ -1242,7 +1237,7 @@ sub append_history_options_to_bashrc {
     print $fh "export HISTSIZE=\n";
     close $fh;
 
-    return 1;
+    return;
 }
 
 # resets the mysql root password to a random password
@@ -1253,7 +1248,7 @@ sub set_local_mysql_root_password {
     my $pw = _genpw();
     system_formatted("/usr/local/cpanel/bin/whmapi1 set_local_mysql_root_password password=$pw");
 
-    return 1;
+    return;
 }
 
 # takes a hostname to set the system to as an argument and potentially updates the hostname
@@ -1300,7 +1295,7 @@ sub configure_etc_cpupdate_conf {
     print $fh "UPDATES=daily\n";
     close($fh);
 
-    return 1;
+    return;
 }
 
 # disable the ea4-experimental repository
@@ -1330,5 +1325,5 @@ sub disable_ea4_experimental {
 
         rename( '/etc/yum.repos.d/EA4-experimental.repo.vmstmp', '/etc/yum.repos.d/EA4-experimental.repo' );
     }
-    return 1;
+    return;
 }
